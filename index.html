@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pipe Flow Dynamics Engine</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        primary: '#0284c7', 
+                        primaryLight: '#e0f2fe', 
+                        dark: '#0f172a', 
+                        panel: '#ffffff',
+                        background: '#f8fafc', 
+                    },
+                    animation: {
+                        'spin-slow': 'spin 3s linear infinite',
+                        'spin-slow-reverse': 'spin 4s linear infinite reverse',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            background-color: #f1f5f9;
+        }
+        
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .math { font-family: 'JetBrains Mono', monospace; font-size: 0.9em; color: #334155; }
+        
+        /* Print Styles & PDF Layout Fixes */
+        .print-only { display: none; }
+        @media print {
+            @page { margin: 12mm; size: landscape; }
+            body { background: white !important; font-size: 11px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .no-print, header, aside { display: none !important; }
+            .print-only { display: flex !important; }
+            
+            main { display: block !important; width: 100% !important; margin: 0 !important; max-width: none !important; padding: 0 !important; }
+            
+            .print-header { 
+                margin-bottom: 25px; 
+                padding-bottom: 15px; 
+                border-bottom: 2px solid #0f172a; 
+            }
+            .card { border: 1px solid #e2e8f0 !important; border-radius: 6px !important; box-shadow: none !important; margin-bottom: 15px; page-break-inside: avoid; break-inside: avoid; }
+            canvas { max-width: 100% !important; max-height: 260px !important; }
+
+            /* Keep the pressure-drop and wall-shear KPI cards together on one page. */
+            .sub-metric-row, .kpi-row { break-inside: avoid !important; page-break-inside: avoid !important; }
+            .sub-metric-row { margin-top: 6px !important; }
+            .sub-metric-row .card { margin-bottom: 0 !important; padding: 9px 12px !important; }
+            .kpi-row .card { padding: 9px 12px !important; margin-bottom: 0 !important; }
+
+            /* Put the Hydraulic Sensitivity Curves on their own PDF page. */
+            .sensitivity-print-page { break-before: page !important; page-break-before: always !important; }
+            .sensitivity-print-page .card { break-inside: avoid !important; page-break-inside: avoid !important; }
+            .sensitivity-print-page canvas { max-height: 300px !important; }
+
+            /* Keep the report summary and data table on a separate following page. */
+            .summary-print-page { break-before: page !important; page-break-before: always !important; }
+        }
+    </style>
+</head>
+<body class="text-slate-800 font-sans min-h-screen flex flex-col antialiased">
+
+    <!-- Loading Fluid Animation Overlay -->
+    <div id="loading-overlay" class="hidden fixed inset-0 z-[100] bg-slate-900/30 backdrop-blur-sm flex-col items-center justify-center no-print transition-opacity duration-300">
+        <div class="relative w-28 h-28 bg-white rounded-full border-[5px] border-sky-100 overflow-hidden shadow-2xl flex items-center justify-center mb-5">
+            <div class="absolute inset-0 bg-sky-50"></div>
+            <!-- CSS Waves -->
+            <div class="absolute w-[250%] h-[250%] bg-sky-500 rounded-[40%] animate-spin-slow bottom-[-130%] opacity-90 transition-all duration-1000" id="wave1"></div>
+            <div class="absolute w-[250%] h-[250%] bg-sky-400 rounded-[45%] animate-spin-slow-reverse bottom-[-140%] opacity-80 transition-all duration-1000" id="wave2"></div>
+            <!-- Droplet -->
+            <i class="fa-solid fa-droplet text-white text-4xl absolute z-10 animate-bounce"></i>
+        </div>
+        <div class="text-sm font-bold text-slate-700 bg-white px-5 py-2.5 rounded-full shadow-lg tracking-wide flex items-center space-x-2.5">
+            <i class="fa-solid fa-circle-notch fa-spin text-sky-500"></i>
+            <span>Simulating Fluid Dynamics...</span>
+        </div>
+    </div>
+
+    <!-- Top Navigation Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+        <div class="flex items-center space-x-4">
+            <div class="bg-sky-600 text-white p-2 rounded-lg flex items-center justify-center h-10 w-10 shadow-sm">
+                <i class="fa-solid fa-water text-xl"></i>
+            </div>
+            <div>
+                <div class="flex items-center space-x-2">
+                    <h1 class="text-xl font-bold tracking-tight text-slate-900">Pipe Flow Dynamics Engine</h1>
+                </div>
+                <p class="text-[11px] font-bold text-sky-600 mt-1 uppercase tracking-wide">Developed by BILAL AHMED AND ABDUL ALEEM</p>
+                <p class="text-xs text-slate-500 mt-0.5">NED University of Engineering & Technology • Department of Civil Engineering ( Batch-2022 )</p>
+            </div>
+        </div>
+        <div class="flex items-center space-x-3 no-print">
+            <button onclick="resetDefaults()" class="px-3 py-1.5 text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 rounded-md transition border border-slate-300 shadow-sm flex items-center space-x-1.5">
+                <i class="fa-solid fa-rotate-right"></i>
+                <span>Reset Defaults</span>
+            </button>
+            <button onclick="exportCSV()" class="px-3 py-1.5 text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-md transition border border-emerald-200 shadow-sm flex items-center space-x-1.5">
+                <i class="fa-solid fa-file-csv"></i>
+                <span>Export CSV</span>
+            </button>
+            <button onclick="window.print()" class="px-4 py-1.5 text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white rounded-md shadow-sm transition flex items-center space-x-2">
+                <i class="fa-solid fa-file-pdf"></i>
+                <span>Generate Lab Report</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 w-full max-w-[1600px] mx-auto p-4 md:p-6 flex flex-col lg:flex-row gap-6">
+
+        <!-- Custom Print Header with Stamp, Signature, and Input Parameters -->
+        <div class="print-only print-header w-full flex-col items-start justify-start">
+            <div class="flex justify-between w-full items-center mb-5">
+                <div class="text-left">
+                    <h1 class="text-2xl font-bold uppercase text-slate-900 mb-4 whitespace-nowrap">PIPE FLOW DYNAMICS & HEAD LOSS ANALYSIS REPORT</h1>
+                    <div class="text-sm space-y-2">
+                        <p><strong>Name:</strong> <span id="print-name">___________________________________</span></p>
+                        <p><strong>Project Name:</strong> <span id="print-proj-name">___________________________________</span></p>
+                        <p><strong>No:</strong> <span id="print-proj-no">___________________________________</span></p>
+                        <p><strong>Developed by:</strong> Pipe Flow Dynamics Engine Made by B&A</p>
+                        <p><strong>Date Generated:</strong> <span id="print-timestamp"></span></p>
+                    </div>
+                </div>
+                <div class="flex items-end space-x-10 pr-4">
+                    <div class="border-[4px] border-double border-sky-700 text-sky-700 rounded-full w-32 h-32 flex flex-col items-center justify-center text-center transform -rotate-12 opacity-80 shadow-sm">
+                        <i class="fa-solid fa-certificate text-lg mb-1"></i>
+                        <span class="text-[10px] font-bold uppercase tracking-widest leading-tight">Verified By</span>
+                        <span class="text-sm font-black uppercase tracking-wider mt-0.5">PFD Engine</span>
+                    </div>
+                    <div class="pb-3">
+                        <p class="text-sm"><strong>Signature:</strong> ________________________</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Professional Input Parameters Bar with Full Names -->
+            <div class="w-full bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col shadow-sm">
+                <div class="font-bold text-xs uppercase tracking-wider text-slate-700 mb-2 border-b border-slate-200 pb-1">System Input Parameters</div>
+                <div class="grid grid-cols-3 gap-y-2 gap-x-6 text-[11px] text-slate-800">
+                    <p><span class="font-sans text-slate-500 font-semibold mr-1.5">Diameter (D):</span><span id="print-D" class="font-mono">0 mm</span></p>
+                    <p><span class="font-sans text-slate-500 font-semibold mr-1.5">Length (L):</span><span id="print-L" class="font-mono">0 m</span></p>
+                    <p><span class="font-sans text-slate-500 font-semibold mr-1.5">Flow Rate (Q):</span><span id="print-Q" class="font-mono">0 L/s</span></p>
+                    <p><span class="font-sans text-slate-500 font-semibold mr-1.5">Roughness (&epsilon;):</span><span id="print-e" class="font-mono">0 mm</span></p>
+                    <p><span class="font-sans text-slate-500 font-semibold mr-1.5">Density (&rho;):</span><span id="print-rho" class="font-mono">0 kg/m³</span></p>
+                    <p><span class="font-sans text-slate-500 font-semibold mr-1.5">Dyn. Visc. (&mu;):</span><span id="print-mu" class="font-mono">0 Pa·s</span></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Left Sidebar (Inputs) -->
+        <aside class="w-full lg:w-[350px] shrink-0 flex flex-col gap-5">
+            
+            <!-- Report Metadata Card -->
+            <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm card no-print">
+                <div class="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
+                    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center space-x-2">
+                        <i class="fa-solid fa-file-signature text-sky-600"></i>
+                        <span>Report Details</span>
+                    </h2>
+                </div>
+                <div class="space-y-3.5">
+                    <div>
+                        <label class="text-[11px] font-semibold text-slate-700">Name</label>
+                        <input type="text" id="inp-name" placeholder="Enter your name" class="w-full bg-slate-50 border border-slate-200 rounded px-3 py-1.5 text-xs focus:border-sky-500 outline-none transition mt-1">
+                    </div>
+                    <div>
+                        <label class="text-[11px] font-semibold text-slate-700">Project Name</label>
+                        <input type="text" id="inp-proj-name" placeholder="Enter project name" class="w-full bg-slate-50 border border-slate-200 rounded px-3 py-1.5 text-xs focus:border-sky-500 outline-none transition mt-1">
+                    </div>
+                    <div>
+                        <label class="text-[11px] font-semibold text-slate-700">No.</label>
+                        <input type="text" id="inp-proj-no" placeholder="Enter No." class="w-full bg-slate-50 border border-slate-200 rounded px-3 py-1.5 text-xs focus:border-sky-500 outline-none transition mt-1">
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm card">
+                <div class="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
+                    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center space-x-2">
+                        <i class="fa-solid fa-sliders text-sky-600"></i>
+                        <span>Pipe & Fluid Parameters</span>
+                    </h2>
+                </div>
+
+                <div class="space-y-3.5">
+                    <div>
+                        <div class="flex justify-between items-end mb-1">
+                            <label class="text-xs font-semibold text-slate-700">Internal Diameter (D)</label>
+                        </div>
+                        <div class="flex space-x-2">
+                            <input type="number" id="inp-D" value="0" min="0" step="any" class="w-2/3 bg-slate-50 border border-slate-200 rounded px-3 py-1.5 text-sm font-mono focus:border-sky-500 outline-none transition">
+                            <select id="unit-D" class="w-1/3 bg-slate-50 border border-slate-200 rounded px-2 py-1.5 text-xs text-slate-600 focus:border-sky-500 outline-none cursor-pointer">
+                                <option value="mm">mm</option>
+                                <option value="m">m</option>
+                                <option value="in">in</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-end mb-1">
+                            <label class="text-xs font-semibold text-slate-700">Pipe Length (L)</label>
+                        </div>
+                        <div class="flex space-x-2">
+                            <input type="number" id="inp-L" value="0" min="0" step="any" class="w-2/3 bg-slate-50 border border-slate-200 rounded px-3 py-1.5 text-sm font-mono focus:border-sky-500 outline-none transition">
+                            <select id="unit-L" class="w-1/3 bg-slate-50 border border-slate-200 rounded px-2 py-1.5 text-xs text-slate-600 focus:border-sky-500 outline-none cursor-pointer">
+                                <option value="m">m</option>
+                                <option value="km">km</option>
+                                <option value="ft">ft</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between items-end mb-1">
+                            <label class="text-xs font-semibold text-slate-700">Flow Rate (Q)</label>
+                        </div>
+                        <div class="flex space-x-2">
+                            <input type="number" id="inp-Q" value="0" min="0" step="any" class="w-2/3 bg-slate-50 border border-slate-200 rounded px-3 py-1.5 text-sm font-mono focus:border-sky-500 outline-none transition">
+                            <select id="unit-Q" class="w-1/3 bg-slate-50 border border-slate-200 rounded px-2 py-1.5 text-xs text-slate-600 focus:border-sky-500 outline-none cursor-pointer">
+                                <option value="L/s">L/s</option>
+                                <option value="m3/s">m&sup3;/s</option>
+                                <option value="GPM">GPM</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between items-end mb-1">
+                            <label class="text-xs font-semibold text-slate-700">Roughness (&epsilon;)</label>
+                            <span class="text-[10px] font-mono text-slate-400">mm</span>
+                        </div>
+                        <div class="flex flex-col space-y-2">
+                            <select id="preset-rough" onchange="applyRoughness()" class="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1.5 text-xs text-slate-600 focus:border-sky-500 outline-none cursor-pointer">
+                                <option value="0">Glass, plastic (0 mm)</option>
+                                <option value="0.0015">Copper or brass tubing (0.0015 mm)</option>
+                                <option value="0.002">Stainless steel (0.002 mm)</option>
+                                <option value="0.01">Rubber, smoothed (0.01 mm)</option>
+                                <option value="0.045" selected>Commercial steel (0.045 mm)</option>
+                                <option value="0.046">Wrought iron (0.046 mm)</option>
+                                <option value="0.15">Galvanized iron (0.15 mm)</option>
+                                <option value="0.26">Cast iron (0.26 mm)</option>
+                                <option value="0.5">Wood stave (0.5 mm)</option>
+                                <option value="3.0">Concrete (0.9-9 mm)</option>
+                                <option value="custom" class="font-bold text-sky-600">Custom Material...</option>
+                            </select>
+                            <div id="custom-rough-container" class="hidden flex space-x-2">
+                                <input type="text" id="inp-mat-name" placeholder="Material Name" class="w-1/2 bg-white border border-slate-200 rounded px-2 py-1.5 text-xs focus:border-sky-500 outline-none">
+                                <input type="number" id="inp-e" value="0.045" min="0" step="any" class="w-1/2 bg-white border border-slate-200 rounded px-3 py-1.5 text-sm font-mono focus:border-sky-500 outline-none transition" disabled>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pt-3 border-t border-slate-100">
+                        <div class="flex flex-col space-y-2 mb-2">
+                            <div class="flex justify-between items-center">
+                                <label class="text-xs font-semibold text-slate-700 flex items-center space-x-1"><i class="fa-solid fa-droplet text-sky-500 text-[10px]"></i><span>Fluid Properties</span></label>
+                                <select id="fluid-preset" onchange="applyFluidPreset()" class="bg-sky-50 border border-sky-200 text-sky-700 text-[10px] rounded px-1 py-0.5 outline-none cursor-pointer">
+                                    <option value="water10">Water @ 10&deg;C</option>
+                                    <option value="water20" selected>Water @ 20&deg;C</option>
+                                    <option value="water30">Water @ 30&deg;C</option>
+                                    <option value="waterX" class="font-bold">Water @ Custom Temp</option>
+                                    <option value="custom">Custom Fluid</option>
+                                </select>
+                            </div>
+                            <div id="custom-temp-container" class="hidden flex items-center justify-between bg-slate-50 p-1.5 rounded border border-slate-200">
+                                <span class="text-[10px] font-semibold text-slate-600">Water Temperature (&deg;C):</span>
+                                <input type="number" id="inp-temp" value="25" oninput="applyFluidPreset()" class="w-16 bg-white border border-slate-200 rounded px-1.5 py-1 text-xs text-center focus:border-sky-500 outline-none">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-[10px] font-semibold text-slate-500 mb-0.5 block">Density &rho; (kg/m&sup3;)</label>
+                                <input type="number" id="inp-rho" value="0" step="any" class="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1.5 text-xs font-mono focus:border-sky-500 outline-none" disabled>
+                            </div>
+                            <div>
+                                <label class="text-[10px] font-semibold text-slate-500 mb-0.5 block">Dyn. Visc &mu; (Pa&middot;s)</label>
+                                <input type="number" id="inp-mu" value="0" step="any" class="w-full bg-slate-50 border border-slate-200 rounded px-2 py-1.5 text-xs font-mono focus:border-sky-500 outline-none" disabled>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Simulation Trigger Button -->
+                <button id="btn-calculate" onclick="triggerSimulation()" class="w-full mt-5 bg-sky-600 hover:bg-sky-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all flex justify-center items-center space-x-2 no-print active:scale-[0.98]">
+                    <i class="fa-solid fa-play text-sm"></i>
+                    <span class="tracking-wide">Run Hydraulic Simulation</span>
+                </button>
+            </div>
+
+            <!-- Equations Card -->
+            <div class="bg-slate-50 rounded-xl p-4 border border-slate-200 shadow-sm card">
+                <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center space-x-2 mb-3 border-b border-slate-200 pb-2">
+                    <i class="fa-solid fa-square-root-variable text-slate-400"></i>
+                    <span>Governing Hydraulics</span>
+                </h2>
+                <div class="space-y-2 text-[11px] text-slate-700 math">
+                    <div class="bg-sky-50 border-l-2 border-sky-400 p-2 rounded-r">
+                        <p><strong class="text-slate-800 font-sans text-[10px] uppercase tracking-wide">Area:</strong> A = &pi;D&sup2; / 4</p>
+                        <p class="mt-1"><strong class="text-slate-800 font-sans text-[10px] uppercase tracking-wide">Velocity:</strong> V = Q / A</p>
+                    </div>
+                    <div class="bg-sky-50 border-l-2 border-sky-400 p-2 rounded-r">
+                        <p><strong class="text-slate-800 font-sans text-[10px] uppercase tracking-wide">Reynolds:</strong> Re = &rho;VD / &mu;</p>
+                    </div>
+                    <div class="bg-sky-50 border-l-2 border-sky-400 p-2 rounded-r">
+                        <p><strong class="text-slate-800 font-sans text-[10px] uppercase tracking-wide">Laminar:</strong> f = 64 / Re</p>
+                        <p class="mt-1 overflow-x-auto whitespace-nowrap"><strong class="text-slate-800 font-sans text-[10px] uppercase tracking-wide">Swamee-Jain:</strong> f = 0.25 / [log<sub>10</sub>(&epsilon;/3.7D + 5.74/Re<sup>0.9</sup>)]&sup2;</p>
+                    </div>
+                    <div class="bg-sky-50 border-l-2 border-sky-400 p-2 rounded-r">
+                        <p><strong class="text-slate-800 font-sans text-[10px] uppercase tracking-wide">Head Loss:</strong> h<sub>f</sub> = f &middot; (L/D) &middot; (V&sup2;/2g)</p>
+                        <p class="mt-1"><strong class="text-slate-800 font-sans text-[10px] uppercase tracking-wide">Pressure Drop:</strong> &Delta;P = &rho;gh<sub>f</sub></p>
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- Right Main Dashboard -->
+        <section class="flex-1 flex flex-col gap-5 min-w-0">
+            
+            <!-- 1. KPI Top Row -->
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 kpi-row">
+                <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card flex flex-col justify-between">
+                    <span class="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Flow Velocity (V)</span>
+                    <div class="mt-2 text-2xl font-bold font-mono text-slate-900" id="res-v">0.00 <span class="text-xs font-sans font-normal text-slate-400">m/s</span></div>
+                    <span class="text-[10px] text-slate-400 mt-1">Cross-section average</span>
+                </div>
+                <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card flex flex-col justify-between">
+                    <span class="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Reynolds No. (Re)</span>
+                    <div class="mt-2 text-2xl font-bold font-mono text-slate-900" id="res-re">0</div>
+                    <div class="mt-1"><span id="res-regime" class="text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-500">-</span></div>
+                </div>
+                <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card flex flex-col justify-between">
+                    <span class="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Friction Factor (f)</span>
+                    <div class="mt-2 text-2xl font-bold font-mono text-emerald-600" id="res-f">0.0000</div>
+                    <span class="text-[10px] text-slate-400 mt-1">Darcy friction factor</span>
+                </div>
+                <div class="bg-sky-50 rounded-xl p-4 border border-sky-200 shadow-sm card flex flex-col justify-between relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-16 h-16 bg-sky-500 opacity-5 rounded-bl-full pointer-events-none"></div>
+                    <span class="text-[11px] text-sky-700 font-semibold uppercase tracking-wide">Total Head Loss (h<sub>f</sub>)</span>
+                    <div class="mt-2 text-3xl font-black font-mono text-sky-600" id="res-hf">0.00 <span class="text-xs font-sans font-medium text-sky-600/70">m</span></div>
+                    <span class="text-[10px] text-sky-600/80 mt-1" id="res-hf-rate">0.000 m loss / m pipe</span>
+                </div>
+            </div>
+
+            <!-- 2. Sub Metric Row -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sub-metric-row">
+                <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card flex justify-between items-center">
+                    <div>
+                        <span class="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Pressure Drop (&Delta;P)</span>
+                        <div class="text-xl font-bold font-mono text-slate-800 mt-0.5" id="res-dp">0.00 <span class="text-xs font-sans font-normal text-slate-400">kPa</span></div>
+                    </div>
+                    <i class="fa-solid fa-gauge-high text-2xl text-slate-200"></i>
+                </div>
+                <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card flex justify-between items-center">
+                    <div>
+                        <span class="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">Wall Shear Stress (&tau;<sub>0</sub>)</span>
+                        <div class="text-xl font-bold font-mono text-slate-800 mt-0.5" id="res-tau">0.00 <span class="text-xs font-sans font-normal text-slate-400">Pa</span></div>
+                    </div>
+                    <i class="fa-solid fa-water border-b-2 border-slate-200 text-2xl text-slate-200 pb-1"></i>
+                </div>
+            </div>
+
+            <!-- 3. Canvas Simulators Grid -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 print:block">
+                
+                <!-- VELOCITY PROFILE (HIDDEN FROM PDF REPORT) -->
+                <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card flex flex-col print:hidden">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center space-x-2">
+                            <i class="fa-solid fa-wind text-sky-500"></i>
+                            <span>Velocity Profile & Particle Flow</span>
+                        </h3>
+                        <span class="text-[10px] font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded" id="sim-label">Awaiting Input</span>
+                    </div>
+                    <div class="relative w-full h-40 bg-slate-50 border border-slate-200 rounded-lg overflow-hidden flex-1">
+                        <canvas id="particleCanvas" class="w-full h-full block"></canvas>
+                    </div>
+                </div>
+
+                <!-- EGL GRAPH (MOVED TO PAGE 2 IN PRINT) -->
+                <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card flex flex-col print:break-before-page print:mb-6">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center space-x-2">
+                            <i class="fa-solid fa-chart-line text-rose-500"></i>
+                            <span>Energy & Hydraulic Grade Lines</span>
+                        </h3>
+                        <div class="flex space-x-3 text-[10px] font-bold uppercase tracking-wide">
+                            <span class="text-rose-600 flex items-center"><span class="w-3 border-t-2 border-dashed border-rose-600 mr-1 inline-block"></span> EGL</span>
+                            <span class="text-emerald-600 flex items-center"><span class="w-3 border-t-2 border-emerald-600 mr-1 inline-block"></span> HGL</span>
+                        </div>
+                    </div>
+                    <div class="relative w-full h-40 bg-slate-50 border border-slate-200 rounded-lg overflow-hidden flex-1">
+                        <canvas id="eglCanvas" class="w-full h-full block"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4. Charts -->
+            <div class="charts-print-page space-y-5 print:block">
+                
+                <!-- SENSITIVITY CURVES (OWN PAGE IN PDF) -->
+                <div class="sensitivity-print-page bg-white rounded-xl p-5 border border-slate-200 shadow-sm card print:mb-6">
+                    <div class="flex items-center space-x-2 mb-4">
+                        <i class="fa-solid fa-chart-area text-sky-600"></i>
+                        <h3 class="text-sm font-bold uppercase tracking-wider text-slate-800">Hydraulic Sensitivity Curves</h3>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="h-64 w-full">
+                            <canvas id="chartQ"></canvas>
+                        </div>
+                        <div class="h-64 w-full border-t pt-4 md:border-t-0 md:pt-0 md:border-l md:pl-6 border-slate-100">
+                            <canvas id="chartD"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUMMARY & TABLE (OWN PAGE AFTER SENSITIVITY CURVES) -->
+                <div class="summary-print-page space-y-5">
+                    
+                    <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm card">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800 mb-3 flex items-center space-x-2">
+                            <i class="fa-solid fa-file-lines text-sky-600"></i>
+                            <span>Engineering Results Summary & Interpretation</span>
+                        </h3>
+                        <div class="text-xs text-slate-700 space-y-2 leading-relaxed" id="report-summary-text">
+                            Awaiting active pipe configuration... Enter system parameters and click Run Simulation.
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm card overflow-hidden">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-800 mb-3 ml-1 flex items-center space-x-2">
+                            <i class="fa-solid fa-table border border-slate-200 p-1 rounded"></i>
+                            <span>Engineering Summary Data</span>
+                        </h3>
+                        <div class="overflow-x-auto rounded-lg border border-slate-100">
+                            <table class="w-full text-xs text-left">
+                                <thead class="bg-slate-50 border-b border-slate-200 text-[10px] uppercase text-slate-500 tracking-wider">
+                                    <tr>
+                                        <th class="p-3 pl-4 font-semibold">Parameter</th>
+                                        <th class="p-3 font-semibold">Symbol</th>
+                                        <th class="p-3 font-semibold text-sky-700">Calculated Value</th>
+                                        <th class="p-3 font-semibold">Units</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100 text-slate-700 font-mono" id="summary-table-body">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <script>
+        const g = 9.81;
+
+        let state = { D:0, L:0, Q:0, e:0, rho:0, mu:0, V:0, Re:0, f:0, hf:0, regime:'-', dP:0, tau:0, area:0, vHead:0, slope:0 };
+        let chartQObj = null;
+        let chartDObj = null;
+
+        window.addEventListener('load', () => {
+            initCharts();
+            resizeCanvases();
+            applyRoughness();
+            applyFluidPreset();
+            calculate(); 
+            requestAnimationFrame(animateParticles);
+        });
+
+        window.addEventListener('resize', resizeCanvases);
+
+        // Handles Print Setup and Injects Inputs into the Header
+        window.addEventListener('beforeprint', () => {
+            const d = new Date();
+            const datePart = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+            const timePart = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+            document.getElementById('print-timestamp').innerText = `${datePart} at ${timePart}`;
+            
+            // User Meta Details
+            document.getElementById('print-name').innerText = document.getElementById('inp-name').value || "___________________________________";
+            document.getElementById('print-proj-name').innerText = document.getElementById('inp-proj-name').value || "___________________________________";
+            document.getElementById('print-proj-no').innerText = document.getElementById('inp-proj-no').value || "___________________________________";
+
+            // Fluid Parameters
+            document.getElementById('print-D').innerText = `${document.getElementById('inp-D').value || 0} ${document.getElementById('unit-D').value}`;
+            document.getElementById('print-L').innerText = `${document.getElementById('inp-L').value || 0} ${document.getElementById('unit-L').value}`;
+            document.getElementById('print-Q').innerText = `${document.getElementById('inp-Q').value || 0} ${document.getElementById('unit-Q').value}`;
+            document.getElementById('print-e').innerText = `${document.getElementById('inp-e').value || 0} mm`;
+            document.getElementById('print-rho').innerText = `${document.getElementById('inp-rho').value || 0} kg/m³`;
+            
+            let muVal = parseFloat(document.getElementById('inp-mu').value) || 0;
+            document.getElementById('print-mu').innerText = `${muVal.toExponential(2)} Pa·s`;
+
+            if(chartQObj) chartQObj.resize();
+            if(chartDObj) chartDObj.resize();
+            resizeCanvases();
+        });
+
+        function triggerSimulation() {
+            const btn = document.getElementById('btn-calculate');
+            const overlay = document.getElementById('loading-overlay');
+            const wave1 = document.getElementById('wave1');
+            const wave2 = document.getElementById('wave2');
+
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin text-sm"></i><span class="tracking-wide">Simulating...</span>`;
+
+            wave1.style.bottom = "-130%";
+            wave2.style.bottom = "-140%";
+            
+            overlay.classList.remove('hidden');
+            overlay.classList.add('flex');
+
+            setTimeout(() => {
+                wave1.style.bottom = "-20%";
+                wave2.style.bottom = "-30%";
+            }, 50);
+
+            setTimeout(() => {
+                calculate();
+                
+                overlay.classList.add('hidden');
+                overlay.classList.remove('flex');
+                
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-play text-sm"></i><span class="tracking-wide">Run Hydraulic Simulation</span>`;
+            }, 1500); 
+        }
+
+        function calculate() {
+            let rawD = parseFloat(document.getElementById('inp-D').value) || 0;
+            let rawL = parseFloat(document.getElementById('inp-L').value) || 0;
+            let rawQ = parseFloat(document.getElementById('inp-Q').value) || 0;
+            let rawe = parseFloat(document.getElementById('inp-e').value) || 0;
+            let rawRho = parseFloat(document.getElementById('inp-rho').value) || 0;
+            let rawMu = parseFloat(document.getElementById('inp-mu').value) || 0;
+
+            let uD = document.getElementById('unit-D').value;
+            let uL = document.getElementById('unit-L').value;
+            let uQ = document.getElementById('unit-Q').value;
+
+            let D = rawD;
+            if(uD === 'mm') D = rawD / 1000;
+            if(uD === 'in') D = rawD * 0.0254;
+
+            let L = rawL;
+            if(uL === 'km') L = rawL * 1000;
+            if(uL === 'ft') L = rawL * 0.3048;
+
+            let Q = rawQ;
+            if(uQ === 'L/s') Q = rawQ / 1000;
+            if(uQ === 'GPM') Q = rawQ * 0.00006309;
+
+            let e = rawe / 1000;  
+            let rho = rawRho;     
+            let mu = rawMu;       
+
+            state = { D, L, Q, e, rho, mu, rawD, rawL, rawQ, rawe, V:0, Re:0, f:0, hf:0, regime:'-', dP:0, tau:0, area:0, vHead:0, slope:0 };
+
+            if (D > 0 && Q > 0 && rho > 0 && mu > 0) {
+                state.area = (Math.PI * Math.pow(D, 2)) / 4;
+                state.V = Q / state.area;
+                state.Re = (rho * state.V * D) / mu;
+                state.vHead = Math.pow(state.V, 2) / (2 * g);
+
+                if (state.Re < 2000) {
+                    state.regime = 'Laminar';
+                    state.f = 64 / state.Re;
+                } else if (state.Re >= 2000 && state.Re < 4000) {
+                    state.regime = 'Transitional';
+                    let f_lam = 64 / 2000;
+                    let f_turb = 0.25 / Math.pow(Math.log10((e/D)/3.7 + 5.74/Math.pow(4000, 0.9)), 2);
+                    let ratio = (state.Re - 2000) / 2000;
+                    state.f = f_lam + ratio * (f_turb - f_lam);
+                } else {
+                    state.regime = 'Turbulent';
+                    state.f = 0.25 / Math.pow(Math.log10((e/D)/3.7 + 5.74/Math.pow(state.Re, 0.9)), 2);
+                }
+
+                state.hf = state.f * (L / D) * state.vHead;
+                state.dP = rho * g * state.hf; 
+                state.tau = (state.dP * D) / (4 * L > 0 ? 4 * L : 1); 
+                state.slope = L > 0 ? state.hf / L : 0;
+            }
+
+            updateUI();
+            updateCharts();
+            drawEGL();
+            updateReportSummary();
+        }
+
+        function updateUI() {
+            const f2 = (n) => n.toFixed(2);
+            const f4 = (n) => n.toFixed(4);
+
+            document.getElementById('res-v').innerHTML = `${f2(state.V)} <span class="text-xs font-sans font-normal text-slate-400">m/s</span>`;
+            
+            if(state.Re === 0) {
+                document.getElementById('res-re').innerText = '0';
+            } else if (state.Re > 10000) {
+                document.getElementById('res-re').innerHTML = state.Re.toExponential(2).replace('e+', ' &times; 10<sup class="text-lg">') + '</sup>';
+            } else {
+                document.getElementById('res-re').innerText = Math.round(state.Re);
+            }
+
+            let rb = document.getElementById('res-regime');
+            rb.innerText = state.regime;
+            rb.className = `text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wider ${
+                state.regime === 'Laminar' ? 'bg-emerald-100 text-emerald-700' :
+                state.regime === 'Turbulent' ? 'bg-rose-100 text-rose-700' :
+                state.regime === 'Transitional' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+            }`;
+
+            document.getElementById('sim-label').innerText = state.V > 0 ? `${state.regime} Profile` : 'Static Fluid';
+
+            document.getElementById('res-f').innerText = state.f > 0 ? f4(state.f) : '0.0000';
+            document.getElementById('res-hf').innerHTML = `${f2(state.hf)} <span class="text-xs font-sans font-medium text-sky-600/70">m</span>`;
+            document.getElementById('res-hf-rate').innerText = `${f4(state.slope)} m loss / m pipe`;
+            
+            document.getElementById('res-dp').innerHTML = `${f2(state.dP/1000)} <span class="text-xs font-sans font-normal text-slate-400">kPa</span>`;
+            document.getElementById('res-tau').innerHTML = `${f2(state.tau)} <span class="text-xs font-sans font-normal text-slate-400">Pa</span>`;
+
+            let tbody = `
+                <tr class="hover:bg-slate-50 transition group">
+                    <td class="p-3 pl-4 font-sans font-medium text-slate-800">Internal Pipe Area</td>
+                    <td class="p-3 font-semibold text-slate-400">A</td>
+                    <td class="p-3 text-sky-700 font-bold bg-sky-50/50">${f4(state.area)}</td>
+                    <td class="p-3 text-slate-400">m&sup2;</td>
+                </tr>
+                <tr class="hover:bg-slate-50 transition group">
+                    <td class="p-3 pl-4 font-sans font-medium text-slate-800">Volumetric Discharge</td>
+                    <td class="p-3 font-semibold text-slate-400">Q</td>
+                    <td class="p-3 text-sky-700 font-bold bg-sky-50/50">${f4(state.Q)}</td>
+                    <td class="p-3 text-slate-400">m&sup3;/s</td>
+                </tr>
+                <tr class="hover:bg-slate-50 transition group">
+                    <td class="p-3 pl-4 font-sans font-medium text-slate-800">Relative Roughness</td>
+                    <td class="p-3 font-semibold text-slate-400">&epsilon; / D</td>
+                    <td class="p-3 text-sky-700 font-bold bg-sky-50/50">${state.D > 0 ? f4(state.e/state.D) : '0.0000'}</td>
+                    <td class="p-3 text-slate-400">-</td>
+                </tr>
+                <tr class="hover:bg-slate-50 transition group">
+                    <td class="p-3 pl-4 font-sans font-medium text-slate-800">Velocity Head</td>
+                    <td class="p-3 font-semibold text-slate-400">V&sup2; / 2g</td>
+                    <td class="p-3 text-sky-700 font-bold bg-sky-50/50">${f4(state.vHead)}</td>
+                    <td class="p-3 text-slate-400">m</td>
+                </tr>
+                <tr class="hover:bg-slate-50 transition group">
+                    <td class="p-3 pl-4 font-sans font-medium text-slate-800">Hydraulic Slope</td>
+                    <td class="p-3 font-semibold text-slate-400">S<sub>f</sub></td>
+                    <td class="p-3 text-sky-700 font-bold bg-sky-50/50">${f4(state.slope)}</td>
+                    <td class="p-3 text-slate-400">m/m</td>
+                </tr>
+            `;
+            document.getElementById('summary-table-body').innerHTML = tbody;
+        }
+
+        function updateReportSummary() {
+            let container = document.getElementById('report-summary-text');
+            if(state.V === 0) {
+                container.innerHTML = "Awaiting active pipe configuration... Enter system parameters and run simulation.";
+                return;
+            }
+            container.innerHTML = `
+                <p><strong>1. Flow Regime & Behavior:</strong> The computed Reynolds number is <strong>${Math.round(state.Re).toLocaleString()}</strong>, classifying the internal flow as <strong>${state.regime}</strong>. This indicates that viscous forces versus inertial forces dictate velocity profile characteristics across the pipe cross-section.</p>
+                <p class="mt-1.5"><strong>2. Friction & Energy Losses:</strong> Using the Darcy-Weisbach formulation combined with the Swamee-Jain explicit friction factor approximation (f = <strong>${state.f.toFixed(5)}</strong>), the system experiences a total major head loss (h<sub>f</sub>) of <strong>${state.hf.toFixed(2)} meters</strong> over the <strong>${state.rawL} ${document.getElementById('unit-L').value}</strong> length.</p>
+                <p class="mt-1.5"><strong>3. Pressure & Shear Dynamics:</strong> The corresponding total pressure drop across the pipeline length evaluates to <strong>${(state.dP/1000).toFixed(2)} kPa</strong> with a boundary wall shear stress (&tau;<sub>0</sub>) of <strong>${state.tau.toFixed(2)} Pa</strong>, dictating structural loading requirements for pipe wall material selection.</p>
+            `;
+        }
+
+        function applyRoughness() {
+            let presetVal = document.getElementById('preset-rough').value;
+            let customContainer = document.getElementById('custom-rough-container');
+            let inpE = document.getElementById('inp-e');
+            
+            if (presetVal === 'custom') {
+                customContainer.classList.remove('hidden');
+                inpE.disabled = false;
+                inpE.classList.remove('bg-slate-50');
+            } else {
+                customContainer.classList.add('hidden');
+                inpE.value = presetVal;
+                inpE.disabled = true;
+                inpE.classList.add('bg-slate-50');
+            }
+        }
+
+        function applyFluidPreset() {
+            const preset = document.getElementById('fluid-preset').value;
+            const rhoInp = document.getElementById('inp-rho');
+            const muInp = document.getElementById('inp-mu');
+            const tempContainer = document.getElementById('custom-temp-container');
+            
+            if(preset === 'custom') {
+                rhoInp.disabled = false; muInp.disabled = false;
+                rhoInp.classList.remove('bg-slate-50'); muInp.classList.remove('bg-slate-50');
+                tempContainer.classList.add('hidden');
+            } else if (preset === 'waterX') {
+                rhoInp.disabled = true; muInp.disabled = true;
+                rhoInp.classList.add('bg-slate-50'); muInp.classList.add('bg-slate-50');
+                tempContainer.classList.remove('hidden');
+                
+                let T = parseFloat(document.getElementById('inp-temp').value) || 20;
+                let rho = 1000 * (1 - (T + 288.9414)/(508929.2 * (T + 68.12963)) * Math.pow(T - 3.9863, 2));
+                let mu = 0.001002 * Math.pow(10, (1.3272*(20-T) - 0.001053*Math.pow(T-20, 2))/(T+105));
+                
+                rhoInp.value = rho.toFixed(2);
+                muInp.value = mu.toExponential(4);
+            } else {
+                rhoInp.disabled = true; muInp.disabled = true;
+                rhoInp.classList.add('bg-slate-50'); muInp.classList.add('bg-slate-50');
+                tempContainer.classList.add('hidden');
+                if(preset === 'water10') { rhoInp.value = 999.7; muInp.value = 0.001307; }
+                if(preset === 'water20') { rhoInp.value = 998.2; muInp.value = 0.001002; }
+                if(preset === 'water30') { rhoInp.value = 995.7; muInp.value = 0.000798; }
+            }
+        }
+
+        function resetDefaults() {
+            document.getElementById('inp-D').value = 0; document.getElementById('unit-D').value = 'mm';
+            document.getElementById('inp-L').value = 0; document.getElementById('unit-L').value = 'm';
+            document.getElementById('inp-Q').value = 0; document.getElementById('unit-Q').value = 'L/s';
+
+            /* Clear report metadata too, so old details are not carried into a new report. */
+            document.getElementById('inp-name').value = '';
+            document.getElementById('inp-proj-name').value = '';
+            document.getElementById('inp-proj-no').value = '';
+            
+            document.getElementById('preset-rough').value = "0.045";
+            applyRoughness();
+            
+            document.getElementById('fluid-preset').value = "water20";
+            applyFluidPreset();
+            calculate(); 
+        }
+
+        function initCharts() {
+            const commonOptions = {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                elements: { line: { tension: 0.3, borderWidth: 2 }, point: { radius: 3, hoverRadius: 5 } }
+            };
+
+            chartQObj = new Chart(document.getElementById('chartQ').getContext('2d'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ data: [], borderColor: '#0284c7', backgroundColor: 'rgba(2, 132, 199, 0.1)', fill: true }] },
+                options: { 
+                    ...commonOptions, 
+                    scales: {
+                        x: { title: { display: true, text: 'Flow Rate (Q)', font: {size: 11, family: 'Inter'} }, grid: { color: '#f1f5f9' }, border: { dash: [4, 4] }, ticks: { font: {family: 'JetBrains Mono', size: 10}, color: '#64748b' } },
+                        y: { title: { display: true, text: 'Head Loss (h_f) [m]', font: {size: 11, family: 'Inter'} }, grid: { color: '#f1f5f9' }, ticks: { font: {family: 'JetBrains Mono', size: 10}, color: '#64748b' } }
+                    },
+                    plugins: { title: { display: true, text: 'Head Loss vs Flow Rate', font: {family: 'Inter', weight:'bold'} } } 
+                }
+            });
+
+            chartDObj = new Chart(document.getElementById('chartD').getContext('2d'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ data: [], borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', fill: true }] },
+                options: { 
+                    ...commonOptions, 
+                    scales: {
+                        x: { title: { display: true, text: 'Internal Diameter (D)', font: {size: 11, family: 'Inter'} }, grid: { color: '#f1f5f9' }, border: { dash: [4, 4] }, ticks: { font: {family: 'JetBrains Mono', size: 10}, color: '#64748b' } },
+                        y: { title: { display: true, text: 'Head Loss (h_f) [m]', font: {size: 11, family: 'Inter'} }, grid: { color: '#f1f5f9' }, ticks: { font: {family: 'JetBrains Mono', size: 10}, color: '#64748b' } }
+                    },
+                    plugins: { title: { display: true, text: 'Head Loss vs Pipe Diameter', font: {family: 'Inter', weight:'bold'} } } 
+                }
+            });
+        }
+
+        function computeHF_isolated(D, L, Q, e, rho, mu) {
+            if (D<=0 || Q<=0 || rho<=0 || mu<=0) return 0;
+            let A = (Math.PI * Math.pow(D, 2)) / 4;
+            let V = Q / A;
+            let Re = (rho * V * D) / mu;
+            let f = 0;
+            if (Re < 2000) f = 64/Re;
+            else f = 0.25 / Math.pow(Math.log10((e/D)/3.7 + 5.74/Math.pow(Re, 0.9)), 2);
+            return f * (L/D) * (Math.pow(V, 2) / (2*g));
+        }
+
+        function updateCharts() {
+            let baseQ = state.Q > 0 ? state.Q : 0.015; 
+            let baseD = state.D > 0 ? state.D : 0.1; 
+            
+            let uQ = document.getElementById('unit-Q').value;
+            let uD = document.getElementById('unit-D').value;
+
+            let qLabels = [], qData = [];
+            for(let i=0.1; i<=2.0; i+=0.2) {
+                let testQ = baseQ * i;
+                let labelVal = testQ;
+                if(uQ === 'L/s') labelVal = testQ * 1000;
+                if(uQ === 'GPM') labelVal = testQ / 0.00006309;
+
+                qLabels.push(labelVal.toFixed(1));
+                qData.push(computeHF_isolated(state.D > 0 ? state.D : baseD, state.L, testQ, state.e, state.rho, state.mu).toFixed(2));
+            }
+            chartQObj.options.scales.x.title.text = `Flow Rate (Q) [${uQ}]`;
+            chartQObj.data.labels = qLabels;
+            chartQObj.data.datasets[0].data = qData;
+            chartQObj.update();
+
+            let dLabels = [], dData = [];
+            for(let i=0.5; i<=2.5; i+=0.2) {
+                let testD = baseD * i;
+                let labelVal = testD;
+                if(uD === 'mm') labelVal = testD * 1000;
+                if(uD === 'in') labelVal = testD / 0.0254;
+
+                dLabels.push(labelVal.toFixed(1));
+                dData.push(computeHF_isolated(testD, state.L, state.Q > 0 ? state.Q : baseQ, state.e, state.rho, state.mu).toFixed(2));
+            }
+            chartDObj.options.scales.x.title.text = `Internal Diameter (D) [${uD}]`;
+            chartDObj.data.labels = dLabels;
+            chartDObj.data.datasets[0].data = dData;
+            chartDObj.update();
+        }
+
+        const partCv = document.getElementById('particleCanvas');
+        const eglCv = document.getElementById('eglCanvas');
+        let pCtx, eCtx;
+        let particles = [];
+        
+        function resizeCanvases() {
+            [partCv, eglCv].forEach(cv => {
+                const rect = cv.parentElement.getBoundingClientRect();
+                cv.width = rect.width;
+                cv.height = rect.height;
+            });
+            pCtx = partCv.getContext('2d');
+            eCtx = eglCv.getContext('2d');
+            
+            particles = [];
+            for(let i=0; i<40; i++) particles.push({x: Math.random(), y: (Math.random()-0.5)*0.8, size: Math.random()*2+1});
+            
+            drawEGL();
+        }
+
+        function drawEGL() {
+            if(!eCtx) return;
+            const w = eglCv.width, h = eglCv.height;
+            eCtx.clearRect(0, 0, w, h);
+
+            const padLeft = 45, padBottom = 25, padTop = 15, padRight = 15;
+            const graphW = w - padLeft - padRight;
+            const graphH = h - padTop - padBottom;
+
+            eCtx.strokeStyle = '#f1f5f9'; eCtx.lineWidth = 1;
+            for(let i=0; i<=4; i++) {
+                let y = padTop + (graphH/4)*i;
+                eCtx.beginPath(); eCtx.moveTo(padLeft, y); eCtx.lineTo(padLeft+graphW, y); eCtx.stroke();
+            }
+
+            eCtx.strokeStyle = '#cbd5e1'; eCtx.lineWidth = 2;
+            eCtx.beginPath(); eCtx.moveTo(padLeft, padTop); eCtx.lineTo(padLeft, padTop+graphH); eCtx.stroke(); 
+            eCtx.beginPath(); eCtx.moveTo(padLeft, padTop+graphH); eCtx.lineTo(padLeft+graphW, padTop+graphH); eCtx.stroke(); 
+
+            eCtx.fillStyle = '#64748b'; eCtx.font = '10px Inter, sans-serif';
+            eCtx.textAlign = 'center';
+            eCtx.fillText(`Distance along pipe (m)`, padLeft + graphW/2, h - 5);
+            
+            eCtx.save();
+            eCtx.translate(15, padTop + graphH/2);
+            eCtx.rotate(-Math.PI/2);
+            eCtx.fillText("Head (m)", 0, 0);
+            eCtx.restore();
+
+            eCtx.textAlign = 'left';
+            eCtx.fillText("x = 0", padLeft + 2, padTop+graphH - 5);
+            eCtx.textAlign = 'right';
+            eCtx.fillText(`x = L`, padLeft+graphW - 2, padTop+graphH - 5);
+            eCtx.textAlign = 'left';
+
+            if(state.V > 0 && state.L > 0) {
+                let drop = (state.hf / (state.hf + state.vHead + 0.1)) * (graphH - 20);
+                let gap = (state.vHead / (state.hf + state.vHead + 0.1)) * (graphH - 20);
+                
+                let startX = padLeft, startY = padTop + 5;
+                let endX = padLeft + graphW, endY = padTop + 5 + drop;
+
+                eCtx.strokeStyle = '#e11d48'; eCtx.lineWidth = 2; eCtx.setLineDash([5, 5]);
+                eCtx.beginPath(); eCtx.moveTo(startX, startY); eCtx.lineTo(endX, endY); eCtx.stroke();
+
+                eCtx.strokeStyle = '#10b981'; eCtx.lineWidth = 2; eCtx.setLineDash([]);
+                eCtx.beginPath(); eCtx.moveTo(startX, startY + gap); eCtx.lineTo(endX, endY + gap); eCtx.stroke();
+
+                eCtx.fillStyle = '#e11d48'; eCtx.font = 'bold 9px sans-serif'; eCtx.textAlign = 'left';
+                eCtx.fillText("EGL", endX - 25, endY - 4);
+                eCtx.fillStyle = '#10b981';
+                eCtx.fillText("HGL", endX - 25, endY + gap + 10);
+            }
+        }
+
+        function animateParticles() {
+            if(!pCtx) { requestAnimationFrame(animateParticles); return; }
+            const w = partCv.width, h = partCv.height, cy = h/2, r = h*0.35;
+            pCtx.clearRect(0, 0, w, h);
+
+            pCtx.fillStyle = '#cbd5e1';
+            pCtx.fillRect(0, cy - r - 4, w, 4);
+            pCtx.fillRect(0, cy + r, w, 4);
+            pCtx.setLineDash([4,4]); pCtx.strokeStyle='#e2e8f0'; pCtx.beginPath(); pCtx.moveTo(0,cy); pCtx.lineTo(w,cy); pCtx.stroke(); pCtx.setLineDash([]);
+
+            if(state.V > 0) {
+                pCtx.strokeStyle = state.regime === 'Laminar' ? '#10b981' : '#e11d48';
+                pCtx.lineWidth = 2;
+                pCtx.beginPath();
+                let startX = w*0.1;
+                let maxW = w*0.3;
+                
+                for(let y = -r; y <= r; y += 2) {
+                    let yNorm = Math.abs(y/r);
+                    let vRatio = 0;
+                    if(state.regime === 'Laminar') {
+                        vRatio = 1 - Math.pow(yNorm, 2); 
+                    } else {
+                        vRatio = Math.pow(1 - yNorm, 1/7); 
+                    }
+                    if(y === -r) pCtx.moveTo(startX, cy + y);
+                    else pCtx.lineTo(startX + vRatio * maxW, cy + y);
+                }
+                pCtx.stroke();
+            }
+
+            let baseSpeed = Math.min(state.V / 2, 0.05); 
+            pCtx.fillStyle = '#0284c7';
+            particles.forEach(p => {
+                let yNorm = Math.abs(p.y/0.5);
+                let vRatio = state.V === 0 ? 0 : (state.regime === 'Laminar' ? (1 - yNorm*yNorm) : Math.pow(1 - yNorm, 1/7));
+                
+                p.x += vRatio * baseSpeed;
+                if(p.x > 1) p.x = 0;
+
+                pCtx.beginPath();
+                pCtx.arc(p.x * w, cy + p.y * r * 2, p.size, 0, Math.PI*2);
+                pCtx.fill();
+            });
+
+            requestAnimationFrame(animateParticles);
+        }
+
+        function exportCSV() {
+            let csv = "Parameter,Value,Unit\n";
+            csv += `Diameter,${state.rawD},${document.getElementById('unit-D').value}\n`;
+            csv += `Length,${state.rawL},${document.getElementById('unit-L').value}\n`;
+            csv += `Flow Rate,${state.rawQ},${document.getElementById('unit-Q').value}\n`;
+            csv += `Roughness,${state.rawe},mm\n`;
+            csv += `Density,${state.rho},kg/m^3\n`;
+            csv += `Viscosity,${state.mu},Pa.s\n`;
+            csv += `Velocity,${state.V.toFixed(4)},m/s\n`;
+            csv += `Reynolds No,${state.Re.toFixed(1)},-\n`;
+            csv += `Flow Regime,${state.regime},-\n`;
+            csv += `Friction Factor (f),${state.f.toFixed(5)},-\n`;
+            csv += `Head Loss (hf),${state.hf.toFixed(4)},m\n`;
+            csv += `Pressure Drop,${(state.dP/1000).toFixed(4)},kPa\n`;
+            csv += `Wall Shear Stress,${state.tau.toFixed(4)},Pa\n`;
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.setAttribute('href', url);
+            a.setAttribute('download', 'Pipe_Flow_Results.csv');
+            a.click();
+        }
+    </script>
+</body>
+</html>
